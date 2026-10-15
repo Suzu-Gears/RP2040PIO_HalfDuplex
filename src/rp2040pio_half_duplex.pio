@@ -1,0 +1,31 @@
+.program rp2040pio_half_duplex_tx_open_drain
+
+    pull
+    set pindirs, 1
+    mov osr, ~osr
+    set x, 7 [5]
+bitloop:
+    out pindirs, 1 [6]
+    jmp x--, bitloop
+    set pindirs, 0 [6]
+
+
+.program rp2040pio_half_duplex_tx_push_pull
+.side_set 1 opt pindirs
+
+    pull side 0
+    set pins, 0 side 1
+    set x, 7 [6]
+bitloop:
+    out pins, 1 [6]
+    jmp x--, bitloop
+    set pins, 1 [6]
+
+
+.program rp2040pio_half_duplex_rx
+
+    wait 0 pin 0
+    set x, 7 [10]
+bitloop:
+    in pins, 1
+    jmp x--, bitloop [6]
