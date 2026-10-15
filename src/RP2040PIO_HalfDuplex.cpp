@@ -43,11 +43,11 @@ static bool pio_claim_two_free_sms_and_add_programs(const pio_program_t *program
   return false;
 }
 
-RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode txMode)
-  : pin_{ pin }, tx_mode_{ txMode } {}
+RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode)
+  : pin_{ pin }, tx_mode_{ tx_mode } {}
 
-void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rxQueueSize) {
-  rx_queue_.init(rxQueueSize);
+void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
+  rx_queue_.init(rx_queue_size);
 
   uint tx_offset;
   uint rx_offset;

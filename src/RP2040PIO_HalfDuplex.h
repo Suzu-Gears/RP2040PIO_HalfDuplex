@@ -15,8 +15,8 @@ enum class HalfDuplexTxMode {
 
 class RP2040PIO_HalfDuplex : public Stream {
 public:
-  RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode txMode = HalfDuplexTxMode::OpenDrain);
-  void begin(uint32_t baudrate = 115200, size_t rxQueueSize = 32);
+  RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode = HalfDuplexTxMode::OpenDrain);
+  void begin(uint32_t baudrate = 115200, size_t rx_queue_size = 32);
   int available() override;
   int read() override;
   int peek() override;
