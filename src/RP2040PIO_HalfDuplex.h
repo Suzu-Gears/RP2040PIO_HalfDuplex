@@ -6,7 +6,7 @@
 #include <Arduino.h>
 #include <hardware/pio.h>
 
-#include "Queue.h"
+#include "RingBuffer.h"
 
 enum class HalfDuplexTxMode {
   OpenDrain,
@@ -29,7 +29,7 @@ private:
   PIO pio_;
   uint tx_sm_;
   uint rx_sm_;
-  Queue<uint8_t> rx_queue_;
+  RingBuffer<uint8_t> rx_queue_;
 
   static void rxIrqHandler();
 };

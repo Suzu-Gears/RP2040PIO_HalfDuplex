@@ -75,6 +75,7 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
   sm_config_set_in_pins(&rx_config, pin_);
   sm_config_set_jmp_pin(&rx_config, pin_);
   sm_config_set_clkdiv(&rx_config, div);
+  sm_config_set_fifo_join(&rx_config, PIO_FIFO_JOIN_RX);
   pio_sm_init(pio_, rx_sm_, rx_offset, &rx_config);
 
   rp2040pio_half_duplex_map[pio_get_index(pio_)][rx_sm_] = this;
@@ -89,16 +90,16 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
 }
 
 int RP2040PIO_HalfDuplex::available() {
-  return rx_queue_.get_level();
+  return rx_queue_.size();
 }
 
 int RP2040PIO_HalfDuplex::read() {
-  std::optional<uint8_t> data = rx_queue_.try_remove();
+  std::optional<uint8_t> data = rx_queue_.pop();
   return data ? *data : -1;
 }
 
 int RP2040PIO_HalfDuplex::peek() {
-  std::optional<uint8_t> data = rx_queue_.try_peek();
+  std::optional<uint8_t> data = rx_queue_.peek();
   return data ? *data : -1;
 }
 
@@ -107,14 +108,14 @@ size_t RP2040PIO_HalfDuplex::write(uint8_t data) {
   return 1;
 }
 
-void RP2040PIO_HalfDuplex::rxIrqHandler() {
+void __not_in_flash_func(RP2040PIO_HalfDuplex::rxIrqHandler)() {
   for (int p = 0; p < NUM_PIOS; ++p) {
     for (int sm = 0; sm < NUM_PIO_STATE_MACHINES; ++sm) {
       RP2040PIO_HalfDuplex *rp2040pio_half_duplex = rp2040pio_half_duplex_map[p][sm];
       if (rp2040pio_half_duplex) {
         while (!pio_sm_is_rx_fifo_empty(rp2040pio_half_duplex->pio_, rp2040pio_half_duplex->rx_sm_)) {
           uint8_t data = pio_sm_get(rp2040pio_half_duplex->pio_, rp2040pio_half_duplex->rx_sm_) >> 24;
-          rp2040pio_half_duplex->rx_queue_.try_add(data);
+          rp2040pio_half_duplex->rx_queue_.push(data);
         }
       }
     }
