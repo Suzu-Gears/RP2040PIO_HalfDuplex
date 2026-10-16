@@ -51,7 +51,7 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
 
   uint tx_offset;
   uint rx_offset;
-  pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OpenDrain ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset);
+  pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset);
   rx_sm_ = tx_sm_ + 1;
 
   float div = static_cast<float>(clock_get_hz(clk_sys)) / (8 * baudrate);
@@ -60,7 +60,7 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
   pio_sm_set_pindirs_with_mask64(pio_, tx_sm_, 0ull << pin_, 1ull << pin_);
   pio_gpio_init(pio_, pin_);
 
-  pio_sm_config tx_config = tx_mode_ == HalfDuplexTxMode::OpenDrain
+  pio_sm_config tx_config = tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN
                               ? rp2040pio_half_duplex_tx_open_drain_program_get_default_config(tx_offset)
                               : rp2040pio_half_duplex_tx_push_pull_program_get_default_config(tx_offset);
   sm_config_set_out_shift(&tx_config, true, false, 32);

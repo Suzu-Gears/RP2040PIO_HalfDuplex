@@ -15,7 +15,7 @@ Half-duplex UART library for RP2040/2350 PIO.
 #include <RP2040PIO_HalfDuplex.h>
 
 RP2040PIO_HalfDuplex halfDuplex(27);
-// RP2040PIO_HalfDuplex halfDuplex(27, HalfDuplexTxMode::PushPull);
+// RP2040PIO_HalfDuplex halfDuplex(27, HalfDuplexTxMode::PUSH_PULL);
 
 void setup() {
   Serial.begin(115200);

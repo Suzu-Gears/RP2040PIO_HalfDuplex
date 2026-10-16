@@ -7,5 +7,5 @@ jobs:
       - uses: arduino/arduino-lint-action@v3
         with:
           project-type: library
-          library-manager: submit
+          library-manager: update
           compliance: strict
