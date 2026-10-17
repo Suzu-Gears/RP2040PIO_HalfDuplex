@@ -1,10 +1,19 @@
+#include <new>
+
 #include <hardware/clocks.h>
+#include <hardware/dma.h>
 #include <hardware/irq.h>
 
 #include "RP2040PIO_HalfDuplex.h"
 #include "rp2040pio_half_duplex.pio.h"
 
 static RP2040PIO_HalfDuplex *rp2040pio_half_duplex_map[NUM_PIOS][NUM_PIO_STATE_MACHINES];
+
+#if PICO_RP2040
+static uint32_t rx_dma_trans_count = 0xFFFFFFFF;
+#else
+static uint32_t rx_dma_trans_count = dma_encode_endless_transfer_count();
+#endif
 
 static bool pio_can_add_two_programs(PIO pio, const pio_program_t *program0, const pio_program_t *program1) {
   if (!pio_can_add_program(pio, program0)) {
@@ -43,12 +52,10 @@ static bool pio_claim_two_free_sms_and_add_programs(const pio_program_t *program
   return false;
 }
 
-RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode)
-  : pin_{ pin }, tx_mode_{ tx_mode } {}
+RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode, HalfDuplexTransfer transfer)
+  : pin_{ pin }, tx_mode_{ tx_mode }, transfer_{ transfer } {}
 
 void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
-  rx_queue_.init(rx_queue_size);
-
   uint tx_offset;
   uint rx_offset;
   if (!pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset)) {
@@ -81,27 +88,39 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
   sm_config_set_fifo_join(&rx_config, PIO_FIFO_JOIN_RX);
   pio_sm_init(pio_, rx_sm_, rx_offset, &rx_config);
 
-  rp2040pio_half_duplex_map[pio_get_index(pio_)][rx_sm_] = this;
-
-  uint pio_irq = pio_get_irq_num(pio_, 0);
-  pio_set_irq0_source_enabled(pio_, pio_get_rx_fifo_not_empty_interrupt_source(rx_sm_), true);
-  irq_set_exclusive_handler(pio_irq, rxIrqHandler);
-  irq_set_enabled(pio_irq, true);
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    beginDma(rx_queue_size);
+  } else {
+    beginInterrupt(rx_queue_size);
+  }
 
   pio_sm_set_enabled(pio_, tx_sm_, true);
   pio_sm_set_enabled(pio_, rx_sm_, true);
 }
 
 int RP2040PIO_HalfDuplex::available() {
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    return (rxWriteIdx() - rx_read_idx_) & rx_buf_mask_;
+  }
   return rx_queue_.size();
 }
 
 int RP2040PIO_HalfDuplex::read() {
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    int data = peek();
+    if (data >= 0) {
+      rx_read_idx_ = (rx_read_idx_ + 1) & rx_buf_mask_;
+    }
+    return data;
+  }
   std::optional<uint8_t> data = rx_queue_.pop();
   return data ? *data : -1;
 }
 
 int RP2040PIO_HalfDuplex::peek() {
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    return rxWriteIdx() == rx_read_idx_ ? -1 : rx_buf_[rx_read_idx_];
+  }
   std::optional<uint8_t> data = rx_queue_.peek();
   return data ? *data : -1;
 }
@@ -111,12 +130,75 @@ size_t RP2040PIO_HalfDuplex::write(uint8_t data) {
   return 1;
 }
 
+size_t RP2040PIO_HalfDuplex::write(const uint8_t *buffer, size_t size) {
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    dma_channel_transfer_from_buffer_now(tx_dma_chan_, buffer, size);
+    dma_channel_wait_for_finish_blocking(tx_dma_chan_);
+    return size;
+  }
+  return Print::write(buffer, size);
+}
+
 void RP2040PIO_HalfDuplex::flush() {
   // TXSTALL is set once the TX state machine waits for data after the last stop bit.
   uint32_t tx_stall = 1u << (PIO_FDEBUG_TXSTALL_LSB + tx_sm_);
   pio_->fdebug = tx_stall;
   while (!(pio_->fdebug & tx_stall)) {
   }
+}
+
+void RP2040PIO_HalfDuplex::beginInterrupt(size_t rx_queue_size) {
+  rx_queue_.init(rx_queue_size);
+
+  rp2040pio_half_duplex_map[pio_get_index(pio_)][rx_sm_] = this;
+
+  uint pio_irq = pio_get_irq_num(pio_, 0);
+  pio_set_irq0_source_enabled(pio_, pio_get_rx_fifo_not_empty_interrupt_source(rx_sm_), true);
+  irq_set_exclusive_handler(pio_irq, rxIrqHandler);
+  irq_set_enabled(pio_irq, true);
+}
+
+void RP2040PIO_HalfDuplex::beginDma(size_t rx_queue_size) {
+  uint ring_size_bits = 0;
+  while ((1u << ring_size_bits) < rx_queue_size && ring_size_bits < 15) {
+    ++ring_size_bits;
+  }
+  rx_buf_ = new (std::align_val_t(1 << ring_size_bits)) uint8_t[1 << ring_size_bits];
+  rx_buf_mask_ = (1 << ring_size_bits) - 1;
+  rx_read_idx_ = 0;
+
+  rx_dma_chan_ = dma_claim_unused_channel(true);
+  dma_channel_config rx_dma_config = dma_channel_get_default_config(rx_dma_chan_);
+  channel_config_set_transfer_data_size(&rx_dma_config, DMA_SIZE_8);
+  channel_config_set_read_increment(&rx_dma_config, false);
+  channel_config_set_write_increment(&rx_dma_config, true);
+  channel_config_set_ring(&rx_dma_config, true, ring_size_bits);
+  channel_config_set_dreq(&rx_dma_config, pio_get_dreq(pio_, rx_sm_, false));
+#if PICO_RP2040
+  // No endless mode on RP2040: a control channel restarts the RX channel whenever it finishes.
+  uint rx_dma_ctrl_chan = dma_claim_unused_channel(true);
+  dma_channel_config rx_dma_ctrl_config = dma_channel_get_default_config(rx_dma_ctrl_chan);
+  channel_config_set_transfer_data_size(&rx_dma_ctrl_config, DMA_SIZE_32);
+  channel_config_set_read_increment(&rx_dma_ctrl_config, false);
+  channel_config_set_write_increment(&rx_dma_ctrl_config, false);
+  dma_channel_configure(rx_dma_ctrl_chan, &rx_dma_ctrl_config, &dma_hw->ch[rx_dma_chan_].al1_transfer_count_trig, &rx_dma_trans_count, 1, false);
+  channel_config_set_chain_to(&rx_dma_config, rx_dma_ctrl_chan);
+#endif
+  dma_channel_configure(rx_dma_chan_, &rx_dma_config, rx_buf_, reinterpret_cast<io_ro_8 *>(&pio_->rxf[rx_sm_]) + 3, rx_dma_trans_count, true);
+
+  tx_dma_chan_ = dma_claim_unused_channel(true);
+  dma_channel_config tx_dma_config = dma_channel_get_default_config(tx_dma_chan_);
+  channel_config_set_transfer_data_size(&tx_dma_config, DMA_SIZE_8);
+  channel_config_set_read_increment(&tx_dma_config, true);
+  channel_config_set_write_increment(&tx_dma_config, false);
+  channel_config_set_dreq(&tx_dma_config, pio_get_dreq(pio_, tx_sm_, true));
+  dma_channel_configure(tx_dma_chan_, &tx_dma_config, &pio_->txf[tx_sm_], nullptr, 0, false);
+}
+
+size_t RP2040PIO_HalfDuplex::rxWriteIdx() {
+  size_t write_idx = (dma_hw->ch[rx_dma_chan_].write_addr - reinterpret_cast<uintptr_t>(rx_buf_)) & rx_buf_mask_;
+  __compiler_memory_barrier();
+  return write_idx;
 }
 
 void __not_in_flash_func(RP2040PIO_HalfDuplex::rxIrqHandler)() {

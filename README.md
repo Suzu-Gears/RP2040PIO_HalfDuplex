@@ -38,6 +38,14 @@ halfDuplex.write(0xFF);
 halfDuplex.flush(); // wait until the last stop bit is sent
 ```
 
+### DMA
+
+```cpp
+RP2040PIO_HalfDuplex halfDuplex(27, HalfDuplexTxMode::PUSH_PULL, HalfDuplexTransfer::DMA);
+```
+
+Receives and transmits by DMA (3 channels on RP2040, 2 on RP2350). `write(buffer, size)` sends the bytes without gaps, and `rx_queue_size` is rounded up to a power of two (up to 32768).
+
 ## License
 
 GNU Lesser General Public License v2.1
