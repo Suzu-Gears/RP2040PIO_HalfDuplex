@@ -51,7 +51,9 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
 
   uint tx_offset;
   uint rx_offset;
-  pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset);
+  if (!pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset)) {
+    panic("RP2040PIO_HalfDuplex: no free PIO state machines");
+  }
   rx_sm_ = tx_sm_ + 1;
 
   float div = static_cast<float>(clock_get_hz(clk_sys)) / (8 * baudrate);
@@ -109,8 +111,8 @@ size_t RP2040PIO_HalfDuplex::write(uint8_t data) {
 }
 
 void __not_in_flash_func(RP2040PIO_HalfDuplex::rxIrqHandler)() {
-  for (int p = 0; p < NUM_PIOS; ++p) {
-    for (int sm = 0; sm < NUM_PIO_STATE_MACHINES; ++sm) {
+  for (uint p = 0; p < NUM_PIOS; ++p) {
+    for (uint sm = 0; sm < NUM_PIO_STATE_MACHINES; ++sm) {
       RP2040PIO_HalfDuplex *rp2040pio_half_duplex = rp2040pio_half_duplex_map[p][sm];
       if (rp2040pio_half_duplex) {
         while (!pio_sm_is_rx_fifo_empty(rp2040pio_half_duplex->pio_, rp2040pio_half_duplex->rx_sm_)) {
