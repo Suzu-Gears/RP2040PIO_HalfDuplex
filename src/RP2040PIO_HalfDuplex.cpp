@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <new>
 
 #include <hardware/clocks.h>
@@ -14,6 +15,10 @@ static uint32_t rx_dma_trans_count = 0xFFFFFFFF;
 #else
 static uint32_t rx_dma_trans_count = dma_encode_endless_transfer_count();
 #endif
+
+static const pio_program_t *tx_program(HalfDuplexTxMode tx_mode) {
+  return tx_mode == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program;
+}
 
 static bool pio_can_add_two_programs(PIO pio, const pio_program_t *program0, const pio_program_t *program1) {
   if (!pio_can_add_program(pio, program0)) {
@@ -53,12 +58,11 @@ static bool pio_claim_two_free_sms_and_add_programs(const pio_program_t *program
 }
 
 RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode, HalfDuplexTransfer transfer)
-  : pin_{ pin }, tx_mode_{ tx_mode }, transfer_{ transfer } {}
+  : pin_{ pin }, tx_mode_{ tx_mode }, transfer_{ transfer }, pio_{ nullptr } {}
 
 void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
-  uint tx_offset;
-  uint rx_offset;
-  if (!pio_claim_two_free_sms_and_add_programs(tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program, &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset, &rx_offset)) {
+  end();
+  if (!pio_claim_two_free_sms_and_add_programs(tx_program(tx_mode_), &rp2040pio_half_duplex_rx_program, &pio_, &tx_sm_, &tx_offset_, &rx_offset_)) {
     panic("RP2040PIO_HalfDuplex: no free PIO state machines");
   }
   rx_sm_ = tx_sm_ + 1;
@@ -70,23 +74,23 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
   pio_gpio_init(pio_, pin_);
 
   pio_sm_config tx_config = tx_mode_ == HalfDuplexTxMode::OPEN_DRAIN
-                              ? rp2040pio_half_duplex_tx_open_drain_program_get_default_config(tx_offset)
-                              : rp2040pio_half_duplex_tx_push_pull_program_get_default_config(tx_offset);
+                              ? rp2040pio_half_duplex_tx_open_drain_program_get_default_config(tx_offset_)
+                              : rp2040pio_half_duplex_tx_push_pull_program_get_default_config(tx_offset_);
   sm_config_set_out_shift(&tx_config, true, false, 32);
   sm_config_set_out_pins(&tx_config, pin_, 1);
   sm_config_set_set_pins(&tx_config, pin_, 1);
   sm_config_set_sideset_pins(&tx_config, pin_);
   sm_config_set_clkdiv(&tx_config, div);
   sm_config_set_fifo_join(&tx_config, PIO_FIFO_JOIN_TX);
-  pio_sm_init(pio_, tx_sm_, tx_offset, &tx_config);
+  pio_sm_init(pio_, tx_sm_, tx_offset_, &tx_config);
 
-  pio_sm_config rx_config = rp2040pio_half_duplex_rx_program_get_default_config(rx_offset);
+  pio_sm_config rx_config = rp2040pio_half_duplex_rx_program_get_default_config(rx_offset_);
   sm_config_set_in_shift(&rx_config, true, true, 8);
   sm_config_set_in_pins(&rx_config, pin_);
   sm_config_set_jmp_pin(&rx_config, pin_);
   sm_config_set_clkdiv(&rx_config, div);
   sm_config_set_fifo_join(&rx_config, PIO_FIFO_JOIN_RX);
-  pio_sm_init(pio_, rx_sm_, rx_offset, &rx_config);
+  pio_sm_init(pio_, rx_sm_, rx_offset_, &rx_config);
 
   if (transfer_ == HalfDuplexTransfer::DMA) {
     beginDma(rx_queue_size);
@@ -96,6 +100,40 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
 
   pio_sm_set_enabled(pio_, tx_sm_, true);
   pio_sm_set_enabled(pio_, rx_sm_, true);
+}
+
+void RP2040PIO_HalfDuplex::end() {
+  if (!pio_) {
+    return;
+  }
+  pio_sm_set_enabled(pio_, tx_sm_, false);
+  pio_sm_set_enabled(pio_, rx_sm_, false);
+  if (transfer_ == HalfDuplexTransfer::DMA) {
+    uint32_t dma_mask = (1u << rx_dma_chan_) | (1u << tx_dma_chan_);
+#if PICO_RP2040
+    dma_mask |= 1u << rx_dma_ctrl_chan_;
+#endif
+    dma_hw->abort = dma_mask; // all at once, so that the control channel cannot restart the RX channel
+    while (dma_hw->abort & dma_mask) {
+    }
+    dma_unclaim_mask(dma_mask);
+    operator delete[](rx_buf_, std::align_val_t(rx_buf_mask_ + 1));
+  } else {
+    pio_set_irq0_source_enabled(pio_, pio_get_rx_fifo_not_empty_interrupt_source(rx_sm_), false);
+    RP2040PIO_HalfDuplex **map = rp2040pio_half_duplex_map[pio_get_index(pio_)];
+    map[rx_sm_] = nullptr;
+    rx_queue_.clear();
+    if (std::all_of(map, map + NUM_PIO_STATE_MACHINES, [](RP2040PIO_HalfDuplex *b) { return !b; })) { // the last one on this PIO
+      uint pio_irq = pio_get_irq_num(pio_, 0);
+      irq_set_enabled(pio_irq, false);
+      irq_remove_handler(pio_irq, rxIrqHandler);
+    }
+  }
+  pio_remove_program(pio_, tx_program(tx_mode_), tx_offset_);
+  pio_remove_program(pio_, &rp2040pio_half_duplex_rx_program, rx_offset_);
+  pio_sm_unclaim(pio_, tx_sm_);
+  pio_sm_unclaim(pio_, rx_sm_);
+  pio_ = nullptr;
 }
 
 int RP2040PIO_HalfDuplex::available() {
@@ -176,13 +214,13 @@ void RP2040PIO_HalfDuplex::beginDma(size_t rx_queue_size) {
   channel_config_set_dreq(&rx_dma_config, pio_get_dreq(pio_, rx_sm_, false));
 #if PICO_RP2040
   // No endless mode on RP2040: a control channel restarts the RX channel whenever it finishes.
-  uint rx_dma_ctrl_chan = dma_claim_unused_channel(true);
-  dma_channel_config rx_dma_ctrl_config = dma_channel_get_default_config(rx_dma_ctrl_chan);
+  rx_dma_ctrl_chan_ = dma_claim_unused_channel(true);
+  dma_channel_config rx_dma_ctrl_config = dma_channel_get_default_config(rx_dma_ctrl_chan_);
   channel_config_set_transfer_data_size(&rx_dma_ctrl_config, DMA_SIZE_32);
   channel_config_set_read_increment(&rx_dma_ctrl_config, false);
   channel_config_set_write_increment(&rx_dma_ctrl_config, false);
-  dma_channel_configure(rx_dma_ctrl_chan, &rx_dma_ctrl_config, &dma_hw->ch[rx_dma_chan_].al1_transfer_count_trig, &rx_dma_trans_count, 1, false);
-  channel_config_set_chain_to(&rx_dma_config, rx_dma_ctrl_chan);
+  dma_channel_configure(rx_dma_ctrl_chan_, &rx_dma_ctrl_config, &dma_hw->ch[rx_dma_chan_].al1_transfer_count_trig, &rx_dma_trans_count, 1, false);
+  channel_config_set_chain_to(&rx_dma_config, rx_dma_ctrl_chan_);
 #endif
   dma_channel_configure(rx_dma_chan_, &rx_dma_config, rx_buf_, reinterpret_cast<io_ro_8 *>(&pio_->rxf[rx_sm_]) + 3, rx_dma_trans_count, true);
 

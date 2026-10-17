@@ -46,6 +46,13 @@ RP2040PIO_HalfDuplex halfDuplex(27, HalfDuplexTxMode::PUSH_PULL, HalfDuplexTrans
 
 Receives and transmits by DMA (3 channels on RP2040, 2 on RP2350). `write(buffer, size)` sends the bytes without gaps, and `rx_queue_size` is rounded up to a power of two (up to 32768).
 
+### End
+
+```cpp
+halfDuplex.end();          // release the state machines (and DMA channels)
+halfDuplex.begin(4000000); // begin() may be called again, e.g. at another baud rate
+```
+
 ## License
 
 GNU Lesser General Public License v2.1
