@@ -35,6 +35,7 @@ if (halfDuplex.available()) {
 
 ```cpp
 halfDuplex.write(0xFF);
+halfDuplex.flush(); // wait until the last stop bit is sent
 ```
 
 ## License

@@ -22,6 +22,7 @@ public:
   int peek() override;
   size_t write(uint8_t data) override;
   using Print::write;
+  void flush() override;
 
 private:
   pin_size_t pin_;

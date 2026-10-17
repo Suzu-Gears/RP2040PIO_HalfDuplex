@@ -70,6 +70,7 @@ void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
   sm_config_set_set_pins(&tx_config, pin_, 1);
   sm_config_set_sideset_pins(&tx_config, pin_);
   sm_config_set_clkdiv(&tx_config, div);
+  sm_config_set_fifo_join(&tx_config, PIO_FIFO_JOIN_TX);
   pio_sm_init(pio_, tx_sm_, tx_offset, &tx_config);
 
   pio_sm_config rx_config = rp2040pio_half_duplex_rx_program_get_default_config(rx_offset);
@@ -108,6 +109,14 @@ int RP2040PIO_HalfDuplex::peek() {
 size_t RP2040PIO_HalfDuplex::write(uint8_t data) {
   pio_sm_put_blocking(pio_, tx_sm_, data);
   return 1;
+}
+
+void RP2040PIO_HalfDuplex::flush() {
+  // TXSTALL is set once the TX state machine waits for data after the last stop bit.
+  uint32_t tx_stall = 1u << (PIO_FDEBUG_TXSTALL_LSB + tx_sm_);
+  pio_->fdebug = tx_stall;
+  while (!(pio_->fdebug & tx_stall)) {
+  }
 }
 
 void __not_in_flash_func(RP2040PIO_HalfDuplex::rxIrqHandler)() {
