@@ -53,6 +53,21 @@ halfDuplex.end();          // release the state machines (and DMA channels)
 halfDuplex.begin(4000000); // begin() may be called again, e.g. at another baud rate
 ```
 
+### Pico SDK
+
+```cmake
+# after pico_sdk_init()
+add_subdirectory(path/to/RP2040PIO_HalfDuplex rp2040pio_halfduplex)
+target_link_libraries(your_app rp2040pio_halfduplex)
+```
+
+Without Arduino, `RP2040PIO_HalfDuplex` has the same methods but derives from `HalfDuplexStream`, a minimal stand-in for `Stream`. See [extras/pico_sdk](extras/pico_sdk):
+
+```sh
+cmake -S extras/pico_sdk -B build -G Ninja -DPICO_SDK_PATH=/path/to/pico-sdk
+cmake --build build
+```
+
 ## License
 
 GNU Lesser General Public License v2.1

@@ -10,11 +10,8 @@
 
 static RP2040PIO_HalfDuplex *rp2040pio_half_duplex_map[NUM_PIOS][NUM_PIO_STATE_MACHINES];
 
-#if PICO_RP2040
+// RP2040: as many as it can count, then reloaded by a control channel. RP2350: endless.
 static uint32_t rx_dma_trans_count = 0xFFFFFFFF;
-#else
-static uint32_t rx_dma_trans_count = dma_encode_endless_transfer_count();
-#endif
 
 static const pio_program_t *tx_program(HalfDuplexTxMode tx_mode) {
   return tx_mode == HalfDuplexTxMode::OPEN_DRAIN ? &rp2040pio_half_duplex_tx_open_drain_program : &rp2040pio_half_duplex_tx_push_pull_program;
@@ -57,7 +54,7 @@ static bool pio_claim_two_free_sms_and_add_programs(const pio_program_t *program
   return false;
 }
 
-RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode, HalfDuplexTransfer transfer)
+RP2040PIO_HalfDuplex::RP2040PIO_HalfDuplex(uint pin, HalfDuplexTxMode tx_mode, HalfDuplexTransfer transfer)
   : pin_{ pin }, tx_mode_{ tx_mode }, transfer_{ transfer }, pio_{ nullptr } {}
 
 void RP2040PIO_HalfDuplex::begin(uint32_t baudrate, size_t rx_queue_size) {
@@ -174,7 +171,7 @@ size_t RP2040PIO_HalfDuplex::write(const uint8_t *buffer, size_t size) {
     dma_channel_wait_for_finish_blocking(tx_dma_chan_);
     return size;
   }
-  return Print::write(buffer, size);
+  return HalfDuplexStream::write(buffer, size);
 }
 
 void RP2040PIO_HalfDuplex::flush() {

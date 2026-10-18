@@ -3,10 +3,31 @@
 #include <cstddef>
 #include <cstdint>
 
-#include <Arduino.h>
 #include <hardware/pio.h>
 
 #include "RingBuffer.h"
+
+#ifdef ARDUINO
+#include <Arduino.h>
+using HalfDuplexStream = Stream;
+#else
+// The Stream methods this library implements, for the Pico SDK.
+class HalfDuplexStream {
+public:
+  virtual ~HalfDuplexStream() = default;
+  virtual int available() = 0;
+  virtual int read() = 0;
+  virtual int peek() = 0;
+  virtual size_t write(uint8_t data) = 0;
+  virtual size_t write(const uint8_t *buffer, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+      write(buffer[i]);
+    }
+    return size;
+  }
+  virtual void flush() {}
+};
+#endif
 
 enum class HalfDuplexTxMode {
   OPEN_DRAIN,
@@ -18,9 +39,9 @@ enum class HalfDuplexTransfer {
   DMA,
 };
 
-class RP2040PIO_HalfDuplex : public Stream {
+class RP2040PIO_HalfDuplex : public HalfDuplexStream {
 public:
-  RP2040PIO_HalfDuplex(pin_size_t pin, HalfDuplexTxMode tx_mode = HalfDuplexTxMode::OPEN_DRAIN,
+  RP2040PIO_HalfDuplex(uint pin, HalfDuplexTxMode tx_mode = HalfDuplexTxMode::OPEN_DRAIN,
                        HalfDuplexTransfer transfer = HalfDuplexTransfer::INTERRUPT);
   void begin(uint32_t baudrate = 115200, size_t rx_queue_size = 32);
   void end();
@@ -29,11 +50,11 @@ public:
   int peek() override;
   size_t write(uint8_t data) override;
   size_t write(const uint8_t *buffer, size_t size) override;
-  using Print::write;
+  using HalfDuplexStream::write;
   void flush() override;
 
 private:
-  pin_size_t pin_;
+  uint pin_;
   HalfDuplexTxMode tx_mode_;
   HalfDuplexTransfer transfer_;
   PIO pio_;
